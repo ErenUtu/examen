@@ -152,7 +152,17 @@ function dealer_locator_shortcode() {
             <input type="text" id="postcode" class="dealer-locator-input-field" placeholder="Voer postcode en plaats in, bijv. 8388 Oosterstreek">
             <button onclick="zoekDealer()" class="dealer-locator-search-button">Zoeken</button>
         </div>
-        <div id="map" class="dealer-locator-map-container" style="height: 500px; width: 100%;"></div>
+        
+        <!-- Kaartweergave -->
+        <div id="map" class="dealer-locator-map-container" style="height: 500px; width: 70%; float: left;"></div>
+
+        <!-- Dealers sectie met nieuwe class -->
+        <div id="dealer-details" class="dealer-locator-details-container" style="width: 28%; float: right; padding-left: 20px; margin-top: 30px;">
+            <h3>Dealers:</h3>
+            <ul id="dealer-list">
+                <!-- Dynamisch gegenereerde dealer details komen hier -->
+            </ul>
+        </div>
     </div>
 
     <!-- Include Leaflet.js CSS and JS -->
@@ -164,7 +174,7 @@ function dealer_locator_shortcode() {
 
     <script>
         var map;
-        var markers = [];
+        var markers = [];  // Array om markers op te slaan
         var userMarker = null; // Variabele voor de gebruikersmarker
         var dealers = <?php echo json_encode($dealers); ?>; // PHP dealers naar JavaScript doorgeven
 
@@ -187,7 +197,6 @@ function dealer_locator_shortcode() {
 
         // Geocodeer adres en haal latitude/longitude op (Nominatim API gebruiken)
         function geocodeAddress(address, callback) {
-            // Voeg land toe voor betere geocoding binnen Nederland
             var url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}, Netherlands&countrycodes=NL`;
 
             fetch(url)
@@ -199,10 +208,22 @@ function dealer_locator_shortcode() {
                         callback(lat, lon);
                     } else {
                         console.log('Geocoding failed for: ' + address);
-                        // Standaard locatie (bijv. Nederland)
                         callback(52.379189, 4.90093);  // Centrum van Nederland (Amsterdam)
                     }
                 });
+        }
+
+        // Haversine-formule om de afstand tussen twee coördinaten te berekenen (in kilometers)
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            var R = 6371; // Aardstraal in km
+            var dLat = (lat2 - lat1) * Math.PI / 180;
+            var dLon = (lon2 - lon1) * Math.PI / 180;
+            var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            var distance = R * c; // Afstand in kilometers
+            return distance.toFixed(2); // Beperk tot twee decimalen
         }
 
         // Zoekdealer functie voor het zoeken op basis van postcode + plaatsnaam
@@ -236,19 +257,18 @@ function dealer_locator_shortcode() {
         // Filter dealers binnen 50 km
         function filterDealers(userLocation) {
             var maxDistance = 50; // 50 km
-            clearMarkers();
+            clearMarkers(); // Verwijder oude markers
 
             // Sorteer de dealers op afstand
             var dealersSorted = dealers.map(function(dealer) {
                 var dealerLocation = [dealer.lat, dealer.lon];
 
-                // Controleer of de lat en lon waarden geldig zijn
                 if (dealer.lat && dealer.lon) {
                     // Bereken de afstand tussen de gebruiker en de dealer
                     var distance = map.distance(userLocation, dealerLocation) / 1000; // Afstand in km
 
                     // Voeg de afstand toe aan het dealerobject
-                    dealer.distance = distance;
+                    dealer.distance = distance.toFixed(2); // Rond de afstand af naar twee decimalen
                 } else {
                     dealer.distance = Infinity; // Markeer dealers zonder locatie als ver weg
                 }
@@ -258,6 +278,9 @@ function dealer_locator_shortcode() {
                 return a.distance - b.distance; // Sorteer op afstand
             });
 
+            // Maak de dealer lijst aan de zijkant leeg voordat we nieuwe dealers toevoegen
+            document.getElementById('dealer-list').innerHTML = '';
+
             // Toon maximaal 5 dichtstbijzijnde dealers
             for (var i = 0; i < Math.min(dealersSorted.length, 5); i++) {
                 var dealer = dealersSorted[i];
@@ -265,33 +288,39 @@ function dealer_locator_shortcode() {
                 if (dealer.lat && dealer.lon) {
                     var dealerLocation = [dealer.lat, dealer.lon];
 
-                    // Add image for the location using OpenStreetMap static map API
-                    var imageUrl = `https://staticmap.openstreetmap.de/staticmap.php?center=${dealer.lat},${dealer.lon}&zoom=14&size=200x200&markers=${dealer.lat},${dealer.lon}&maptype=terrain`;
+                    // Voeg de dealer toe aan de lijst aan de rechterkant
+                    var dealerItem = document.createElement('li');
+                    dealerItem.innerHTML = `
+                        <strong>${dealer.naamorg}</strong><br>
+                        ${dealer.adres} ${dealer.huisnummer}<br>
+                        ${dealer.postcode} ${dealer.stad}<br>
+                        <strong>Afstand:</strong> ${dealer.distance} km
+                        <br><a href="https://www.google.com/maps/dir/?api=1&origin=${userMarker.getLatLng().lat},${userMarker.getLatLng().lng}&destination=${dealer.lat},${dealer.lon}" target="_blank">📍 Route via Google Maps</a>
+                    `;
+                    document.getElementById('dealer-list').appendChild(dealerItem);
 
-                    // Controleer of dealer.url een volledige URL is en voeg deze correct toe
-                    var websiteLink = dealer.url && (dealer.url.startsWith('http://') || dealer.url.startsWith('https://')) 
-                        ? `<a href="${dealer.url}" target="_blank">Website</a>` 
-                        : dealer.url ? `<a href="http://${dealer.url}" target="_blank">Website</a>` : 'Website niet beschikbaar';
-
-                    var dealerMarker = L.marker(dealerLocation).addTo(map)
+                    // Voeg dealermarker toe op de kaart
+                    var marker = L.marker(dealerLocation).addTo(map)
                         .bindPopup(`
                             <strong>${dealer.naamorg}</strong><br>
                             ${dealer.adres} ${dealer.huisnummer}<br>
                             ${dealer.postcode} ${dealer.stad}<br>
-                            ${websiteLink}<br>
-                            <img src="${imageUrl}" alt="Location Image">
+                            <strong>Afstand:</strong> ${dealer.distance} km<br>
+                            <a href="${dealer.url}" target="_blank">Website</a><br>
+                            <a href="https://www.google.com/maps/dir/?api=1&origin=${userMarker.getLatLng().lat},${userMarker.getLatLng().lng}&destination=${dealer.lat},${dealer.lon}" target="_blank" style="color:blue; font-weight:bold;">📍 Route via Google Maps</a>
                         `);
-                    markers.push(dealerMarker);
+
+                    markers.push(marker);  // Voeg marker toe aan de markers array
                 }
             }
         }
 
         // Verwijder alle markers van de kaart
         function clearMarkers() {
-            for (var i = 0; i < markers.length; i++) {
-                markers[i].remove();
-            }
-            markers = [];
+            markers.forEach(function(marker) {
+                marker.remove();  // Verwijder elke marker van de kaart
+            });
+            markers = [];  // Reset de markers array
         }
 
         // Initialize the map when the page is loaded
