@@ -1,7 +1,7 @@
 <?php
 
 if ( ! defined( 'WP_DEBUG' ) ) {
-    die( 'Direct access forbidden.' );
+    die( 'Directe toegang verboden.' );
 }
 
 // Laad de stijl van het thema
@@ -9,7 +9,7 @@ add_action( 'wp_enqueue_scripts', function () {
     wp_enqueue_style( 'parent-style', get_template_directory_uri() . '/style.css' );
 });
 
-// Functie om geolocatie op te halen met behulp van Nominatim API
+// Functie om geolocatie op te halen met behulp van de Nominatim API
 function get_lat_lon_from_address($address) {
     $url = 'https://nominatim.openstreetmap.org/search?format=json&q=' . urlencode($address . ', Netherlands') . '&countrycodes=NL';
 
@@ -18,7 +18,7 @@ function get_lat_lon_from_address($address) {
     $data = wp_remote_retrieve_body($response);
     $json = json_decode($data, true);
 
-    // Haal de eerste resultaat en geef de latitude en longitude terug
+    // Haal het eerste resultaat en geef de latitude en longitude terug
     if (isset($json[0])) {
         $lat = $json[0]['lat'];
         $lon = $json[0]['lon'];

@@ -22,10 +22,9 @@ function dealer_admin_page() {
     $dealers = $wpdb->get_results("SELECT * FROM $table_name $search_query");
 
     // Success bericht na het toevoegen van een nieuwe dealer
-if (isset($_GET['success']) && $_GET['success'] == 'true') {
-    echo '<div class="dealer-admin-notification success"><p>Dealer succesvol toegevoegd!</p></div>';
-}
-
+    if (isset($_GET['success']) && $_GET['success'] == 'true') {
+        echo '<div class="dealer-admin-notification success"><p>Dealer succesvol toegevoegd!</p></div>';
+    }
 
     // Verwijder een dealer als de 'delete' parameter is gezet
     if (isset($_GET['delete'])) {
@@ -91,24 +90,50 @@ if (isset($_GET['success']) && $_GET['success'] == 'true') {
                 // Verwerk het CSV-bestand met puntkomma als scheidingsteken
                 if (($handle = fopen($_FILES['csv_file']['tmp_name'], "r")) !== FALSE) {
                     $row = 0;
+                    $addedDealers = 0;
+                    $duplicatesFound = false; // Flag to track if any duplicates are found
+                    $validDealerFound = false; // Flag to track if at least one valid dealer is found
+
                     while (($data = fgetcsv($handle, 1000, ";")) !== FALSE) { // Aangepast naar puntkomma
                         if ($row > 0) { // Skip de header
-                            // Verwerk elke rij en voeg de dealer toe aan de database
-                            $wpdb->insert($table_name, array(
-                                'ccdeb' => $wpdb->get_var("SELECT MAX(ccdeb) FROM $table_name") + 1,
-                                'naamorg' => sanitize_text_field($data[1]),
-                                'adres' => sanitize_text_field($data[3]),
-                                'huisnummer' => sanitize_text_field($data[4]),
-                                'postcode' => sanitize_text_field($data[5]),
-                                'stad' => sanitize_text_field($data[6]),
-                                'url' => !empty($data[2]) ? sanitize_text_field($data[2]) : '',
-                            ));
+                            // Verwerk elke rij
+                            $dealerName = sanitize_text_field($data[1]);
+                            $postcode = sanitize_text_field($data[5]);
+                            
+                            // Check if the dealer already exists
+                            $dealer_exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table_name WHERE naamorg = %s AND postcode = %s", $dealerName, $postcode));
+                            
+                            if ($dealer_exists == 0) {
+                                // Dealer doesn't exist, so insert into the database
+                                $wpdb->insert($table_name, array(
+                                    'ccdeb' => $wpdb->get_var("SELECT MAX(ccdeb) FROM wp_dealers") + 1,
+                                    'naamorg' => $dealerName,
+                                    'adres' => sanitize_text_field($data[3]),
+                                    'huisnummer' => sanitize_text_field($data[4]),
+                                    'postcode' => $postcode,
+                                    'stad' => sanitize_text_field($data[6]),
+                                    'url' => !empty($data[2]) ? sanitize_text_field($data[2]) : '',
+                                ));
+                                $addedDealers++;
+                                $validDealerFound = true; // Mark as valid dealer found
+                            } else {
+                                $duplicatesFound = true; // A duplicate was found, set the flag to true
+                            }
                         }
                         $row++;
                     }
                     fclose($handle);
 
-                    echo '<div class="dealer-admin-notification success"><p>CSV-bestand succesvol verwerkt!</p></div>';
+                    // Show notification based on added dealers and duplicates
+                    if ($duplicatesFound) {
+                        echo '<div class="dealer-admin-notification error"><p>Er zijn duplicaten gevonden, deze dealers zijn niet toegevoegd!</p></div>';
+                    }
+                    if ($addedDealers > 0) {
+                        echo '<div class="dealer-admin-notification success"><p>' . $addedDealers . ' dealers succesvol toegevoegd!</p></div>';
+                    } else {
+                        echo '<div class="dealer-admin-notification error"><p>Geen nieuwe dealers toegevoegd, mogelijk duplicaten gevonden.</p></div>';
+                    }
+
                     // Herlaad de pagina na het verwerken van het bestand
                     echo '<meta http-equiv="refresh" content="0;URL=?page=dealer_admin">';
                     exit;
@@ -118,6 +143,119 @@ if (isset($_GET['success']) && $_GET['success'] == 'true') {
             echo '<div class="dealer-admin-notification error"><p>Geen bestand geselecteerd.</p></div>';
         }
     }
+
+    // Controleer of een dealernaam al bestaat via AJAX
+    ?>
+    <script>
+        jQuery(document).ready(function($) {
+            var hasDuplicate = false; // Flag to track if duplicates are found
+            var validDealerFound = false; // Flag to track if valid dealer is found
+
+            // Dealer name validation for the form
+            $('#dealer_name').on('keyup', function() {
+                var dealerName = $(this).val();
+
+                if (dealerName.length > 2) { // Check only if 3 or more characters
+                    $.ajax({
+                        url: '<?php echo admin_url('admin-ajax.php'); ?>',
+                        method: 'POST',
+                        data: {
+                            action: 'check_dealer_exists',
+                            dealer_name: dealerName
+                        },
+                        success: function(response) {
+                            if (response == 'exists') {
+                                $('#dealer-name-feedback').text('Deze dealernaam bestaat al.').css('color', 'red');
+                                $('#submit_dealer').prop('disabled', true);  // Disable submit if duplicate
+                            } else {
+                                $('#dealer-name-feedback').text('');
+                                $('#submit_dealer').prop('disabled', false);  // Enable submit if no duplicate
+                            }
+                        }
+                    });
+                } else {
+                    // If the dealer name field is cleared or has fewer than 3 characters, reset the message and enable the button
+                    $('#dealer-name-feedback').text('');
+                    $('#submit_dealer').prop('disabled', false);
+                }
+            });
+
+            // Preview CSV when file is selected
+            $('input[type="file"]').change(function(e) {
+                var file = e.target.files[0];
+                if (file && file.type === 'text/csv') {
+                    var reader = new FileReader();
+                    reader.onload = function(event) {
+                        var content = event.target.result;
+                        var rows = content.split("\n");
+                        var html = "<table><thead><tr><th>Naam</th><th>Adres</th><th>Postcode</th><th>Stad</th><th>URL</th><th>Status</th></tr></thead><tbody>";
+
+                        hasDuplicate = false; // Reset the duplicate flag
+                        validDealerFound = false; // Reset valid dealer flag
+
+                        rows.forEach(function(row, index) {
+                            if (index > 0 && row.trim() !== "") { // Skip header row and empty rows
+                                var cols = row.split(';');
+                                html += "<tr class='csv-row' data-dealer-name='" + cols[1] + "' data-postcode='" + cols[5] + "'>";
+                                html += "<td>" + cols[1] + "</td>";
+                                html += "<td>" + cols[3] + "</td>";
+                                html += "<td>" + cols[5] + "</td>";
+                                html += "<td>" + cols[6] + "</td>";
+                                html += "<td>" + (cols[2] ? cols[2] : 'Geen URL') + "</td>";
+                                html += "<td class='status'>Checking...</td>"; // Default status
+                                html += "</tr>";
+                            }
+                        });
+                        html += "</tbody></table>";
+                        $('#csv-preview').html(html);
+
+                        // Check duplicates via AJAX
+                        $('.csv-row').each(function() {
+                            var dealerName = $(this).data('dealer-name');
+                            var postcode = $(this).data('postcode');
+
+                            var row = $(this); // Store the row for later use
+
+                            $.ajax({
+                                url: '<?php echo admin_url('admin-ajax.php'); ?>',
+                                method: 'POST',
+                                data: {
+                                    action: 'check_dealer_exists',
+                                    dealer_name: dealerName,
+                                    dealer_postcode: postcode
+                                },
+                                success: function(response) {
+                                    var statusCell = row.find('.status'); // Find the status cell in this row
+                                    if (response === 'exists') {
+                                        row.css('background-color', 'red');  // Highlight in red if duplicate
+                                        statusCell.text('Duplicate found').css('color', 'red');  // Update status to duplicate
+                                        hasDuplicate = true;  // Mark as having a duplicate
+                                    } else {
+                                        statusCell.text('Valid').css('color', 'green');  // Update status to valid
+                                        validDealerFound = true; // At least one valid dealer is found
+                                    }
+
+                                    // If any duplicates were found, disable the upload button
+                                    if (hasDuplicate) {
+                                        $('input[type="submit"][name="upload_csv"]').prop('disabled', !validDealerFound);
+                                    } else {
+                                        $('input[type="submit"][name="upload_csv"]').prop('disabled', false);
+                                    }
+                                }
+                            });
+                        });
+                    };
+                    reader.readAsText(file);
+                } else {
+                    alert('Selecteer een geldig CSV-bestand.');
+                }
+            });
+        });
+    </script>
+    <div id="dealer-name-feedback"></div>
+    <div id="csv-preview" style="overflow-x:auto;"></div>
+
+    <?php
 
     // Als de 'edit' parameter is gezet, haal dan de dealer op
     if (isset($_GET['edit'])) {
@@ -285,4 +423,28 @@ if (isset($_GET['success']) && $_GET['success'] == 'true') {
 // Registreer de shortcode
 add_shortcode('dealer_admin', 'dealer_admin_page');
 
+// Ajax actie om te controleren of de dealernaam al bestaat
+function check_dealer_exists() {
+    global $wpdb;
+
+    if (isset($_POST['dealer_name'])) {
+        $dealer_name = sanitize_text_field($_POST['dealer_name']);
+        $table_name = 'wp_dealers';
+        
+        // Controleer of er al een dealer is met dezelfde naam
+        $dealer_exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table_name WHERE naamorg = %s", $dealer_name));
+        
+        if ($dealer_exists > 0) {
+            echo 'exists';
+        } else {
+            echo 'not_exists';
+        }
+    }
+
+    wp_die(); // Stop de uitvoering van de AJAX-aanroep
+}
+
+// Voeg de Ajax actie toe
+add_action('wp_ajax_check_dealer_exists', 'check_dealer_exists');
+add_action('wp_ajax_nopriv_check_dealer_exists', 'check_dealer_exists');
 ?>
