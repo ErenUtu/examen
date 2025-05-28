@@ -3,33 +3,54 @@
 function dealer_admin_page() {
     ob_start();
 
+    // Laad de CSS voor de admin pagina
     echo '<link rel="stylesheet" href="' . plugin_dir_url(__FILE__) . 'dealer-admin-style.css?ver=1.0.0">';
 
+    // Controleer of de gebruiker administrator is
     if ( ! current_user_can( 'administrator' ) ) {
-        wp_die( 'Je hebt geen toegang tot deze pagina.' );
+        // Bouw de admin pagina URL voor redirect
+        $redirect_url = (is_ssl() ? 'https://' : 'http://') . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'];
+        // Toon foutmelding met inlog-link en redirect na succesvolle login
+        wp_die(
+            'Je hebt geen toegang tot deze pagina. <a href="' . esc_url( wp_login_url( $redirect_url ) ) . '">Inloggen</a>'
+        );
     }
 
     global $wpdb;
-    $table_name = 'wp_dealers';
+    $table_name = 'wp_dealers'; // Tabelnaam voor dealers
 
     // Zoekopdracht afhandelen
     $search_term = isset($_GET['search']) ? sanitize_text_field($_GET['search']) : '';
     $search_query = '';
     if ($search_term) {
-        $search_query = $wpdb->prepare(
-            "WHERE naamorg LIKE %s OR postcode LIKE %s OR stad LIKE %s",
-            '%' . $wpdb->esc_like($search_term) . '%',
-            '%' . $wpdb->esc_like($search_term) . '%',
-            '%' . $wpdb->esc_like($search_term) . '%'
-        );
+        // Als het zoekterm een nummer is, zoek dan ook op ccdeb exact
+        if (is_numeric($search_term)) {
+            $search_query = $wpdb->prepare(
+                "WHERE naamorg LIKE %s OR postcode LIKE %s OR stad LIKE %s OR ccdeb = %d",
+                '%' . $wpdb->esc_like($search_term) . '%',
+                '%' . $wpdb->esc_like($search_term) . '%',
+                '%' . $wpdb->esc_like($search_term) . '%',
+                intval($search_term)
+            );
+        } else {
+            $search_query = $wpdb->prepare(
+                "WHERE naamorg LIKE %s OR postcode LIKE %s OR stad LIKE %s",
+                '%' . $wpdb->esc_like($search_term) . '%',
+                '%' . $wpdb->esc_like($search_term) . '%',
+                '%' . $wpdb->esc_like($search_term) . '%'
+            );
+        }
     }
 
+    // Haal alle dealers op, eventueel gefilterd op zoekopdracht
     $dealers = $wpdb->get_results("SELECT * FROM $table_name $search_query");
 
+    // Succesmelding na toevoegen dealer
     if (isset($_GET['success']) && $_GET['success'] == 'true') {
         echo '<div class="dealer-admin-notification success"><p>Dealer succesvol toegevoegd!</p></div>';
     }
 
+    // Afhandelen van verwijderen van dealer
     if (isset($_GET['delete'])) {
         $dealer_id = intval($_GET['delete']);
         $deleted = $wpdb->delete($table_name, array('ccdeb' => $dealer_id));
@@ -42,7 +63,7 @@ function dealer_admin_page() {
         exit;
     }
 
-    // Edit dealer
+    // Afhandelen bewerken van een dealer
     if (isset($_GET['edit'])) {
         $dealer_id = intval($_GET['edit']);
         $dealer_to_edit = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_name WHERE ccdeb = %d", $dealer_id));
@@ -54,6 +75,7 @@ function dealer_admin_page() {
                 $dealer_city = sanitize_text_field($_POST['dealer_city']);
                 $dealer_url = sanitize_text_field($_POST['dealer_url']);
 
+                // Update dealer gegevens
                 $wpdb->update($table_name, array(
                     'naamorg' => $dealer_name,
                     'adres' => $dealer_address,
@@ -70,6 +92,10 @@ function dealer_admin_page() {
             <div class="dealer-admin-wrap">
                 <h1 class="page-title">Dealer bewerken</h1>
                 <form method="post" action="" class="dealer-admin-form">
+                    <div class="dealer-admin-card">
+                        <label for="dealer_ccdeb">ccdeb (uniek nummer)</label>
+                        <input type="text" name="dealer_ccdeb" id="dealer_ccdeb" class="input-field" value="<?php echo esc_attr($dealer_to_edit->ccdeb); ?>" readonly>
+                    </div>
                     <div class="dealer-admin-card">
                         <label for="dealer_name">Naam van de dealer</label>
                         <input type="text" name="dealer_name" id="dealer_name" class="input-field" value="<?php echo esc_attr(stripslashes($dealer_to_edit->naamorg)); ?>" required>
@@ -98,10 +124,12 @@ function dealer_admin_page() {
             <?php
             return ob_get_clean();
         } else {
+            // Dealer niet gevonden bij bewerken
             echo '<div class="dealer-admin-notification error"><p>Dealer niet gevonden!</p></div>';
         }
     }
 
+    // Afhandelen toevoegen van een dealer
     if (isset($_POST['submit_dealer'])) {
         $dealer_name = sanitize_text_field($_POST['dealer_name']);
         $dealer_address = sanitize_text_field($_POST['dealer_address']);
@@ -109,6 +137,7 @@ function dealer_admin_page() {
         $dealer_city = sanitize_text_field($_POST['dealer_city']);
         $dealer_url = sanitize_text_field($_POST['dealer_url']);
 
+        // Genereer nieuwe ccdeb
         $last_ccdeb = $wpdb->get_var("SELECT MAX(ccdeb) FROM $table_name");
         $new_ccdeb = $last_ccdeb ? $last_ccdeb + 1 : 300000;
 
@@ -126,6 +155,7 @@ function dealer_admin_page() {
         if ($latlon['lat']) $insert_data['lat'] = $latlon['lat'];
         if ($latlon['lon']) $insert_data['lon'] = $latlon['lon'];
 
+        // Voeg dealer toe aan database
         $wpdb->insert($table_name, $insert_data);
 
         echo '<div class="dealer-admin-notification success"><p>Dealer toegevoegd!</p></div>';
@@ -133,7 +163,7 @@ function dealer_admin_page() {
         exit;
     }
 
-    // CSV upload
+    // CSV upload voor dealers
     if (isset($_POST['upload_csv'])) {
         if (!empty($_FILES['csv_file']['name'])) {
             $allowed_extensions = ['csv'];
@@ -158,6 +188,7 @@ function dealer_admin_page() {
                             $stad = sanitize_text_field($data[6]);
                             $url = !empty($data[2]) ? sanitize_text_field($data[2]) : '';
 
+                            // Controleer op bestaande dealer (naam + postcode)
                             $dealer_exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table_name WHERE naamorg = %s AND postcode = %s", $dealerName, $postcode));
                             if ($dealer_exists == 0) {
                                 // Automatisch lat/lon ophalen
@@ -200,11 +231,13 @@ function dealer_admin_page() {
         }
     }
 
+    // ================= REST VAN DE HTML EN JAVASCRIPT =======================
     ?>
     <script>
     jQuery(document).ready(function($) {
         var hasDuplicate = false;
         var validDealerFound = false;
+        // Live check voor bestaande dealernaam bij handmatig toevoegen
         $('#dealer_name').on('keyup', function() {
             var dealerName = $(this).val();
             if (dealerName.length > 2) {
@@ -231,6 +264,7 @@ function dealer_admin_page() {
             }
         });
 
+        // CSV preview met ccdeb
         $('input[type="file"]').change(function(e) {
             var file = e.target.files[0];
             if (file && file.type === 'text/csv') {
@@ -238,7 +272,11 @@ function dealer_admin_page() {
                 reader.onload = function(event) {
                     var content = event.target.result;
                     var rows = content.split("\n");
-                    var html = "<table class='dealer-admin-csv-preview'><thead><tr><th>Naam</th><th>Adres</th><th>Postcode</th><th>Stad</th><th>URL</th><th>Status</th><th>Actie</th></tr></thead><tbody>";
+                    var ccdeb_base = <?php
+                        $last_ccdeb = $wpdb->get_var("SELECT MAX(ccdeb) FROM $table_name");
+                        echo ($last_ccdeb ? $last_ccdeb : 300000);
+                    ?>;
+                    var html = "<table class='dealer-admin-csv-preview'><thead><tr><th>ccdeb</th><th>Naam</th><th>Adres</th><th>Postcode</th><th>Stad</th><th>URL</th><th>Status</th><th>Actie</th></tr></thead><tbody>";
 
                     hasDuplicate = false;
                     validDealerFound = false;
@@ -246,7 +284,9 @@ function dealer_admin_page() {
                     rows.forEach(function(row, index) {
                         if (index > 0 && row.trim() !== "") {
                             var cols = row.split(';');
-                            html += "<tr class='csv-row' data-dealer-name='" + cols[1] + "' data-postcode='" + cols[5] + "' data-adres='" + cols[3] + "' data-huisnummer='" + (cols[4]||'') + "' data-stad='" + (cols[6]||'') + "' data-url='" + (cols[2]||'') + "'>";
+                            var ccdeb = ccdeb_base + index;
+                            html += "<tr class='csv-row' data-ccdeb='" + ccdeb + "' data-dealer-name='" + cols[1] + "' data-postcode='" + cols[5] + "' data-adres='" + cols[3] + "' data-huisnummer='" + (cols[4]||'') + "' data-stad='" + (cols[6]||'') + "' data-url='" + (cols[2]||'') + "'>";
+                            html += "<td>" + ccdeb + "</td>";
                             html += "<td>" + cols[1] + "</td>";
                             html += "<td>" + cols[3] + "</td>";
                             html += "<td>" + cols[5] + "</td>";
@@ -260,6 +300,7 @@ function dealer_admin_page() {
                     html += "</tbody></table>";
                     $('#csv-preview').html(html);
 
+                    // Check per regel op duplicaat
                     $('.csv-row').each(function() {
                         var dealerName = $(this).data('dealer-name');
                         var postcode = $(this).data('postcode');
@@ -327,7 +368,6 @@ function dealer_admin_page() {
                 },
                 success: function(response) {
                     if (response === 'success') {
-                        // Ververs de pagina na succesvol toevoegen
                         window.location.reload();
                     } else if(response === 'duplicate') {
                         row.css('background-color', '#ffebee');
@@ -350,6 +390,14 @@ function dealer_admin_page() {
             <section class="dealer-section">
                 <h2>Voeg een nieuwe dealer toe</h2>
                 <form method="post" action="" class="dealer-admin-form">
+                    <div class="dealer-admin-card">
+                        <label for="dealer_ccdeb">ccdeb (uniek nummer)</label>
+                        <input type="text" name="dealer_ccdeb" id="dealer_ccdeb" class="input-field" value="<?php
+                            $last_ccdeb = $wpdb->get_var("SELECT MAX(ccdeb) FROM $table_name");
+                            $new_ccdeb = $last_ccdeb ? $last_ccdeb + 1 : 300000;
+                            echo esc_attr($new_ccdeb);
+                        ?>" readonly>
+                    </div>
                     <div class="dealer-admin-card">
                         <label for="dealer_name">Naam van de dealer</label>
                         <input type="text" name="dealer_name" id="dealer_name" class="input-field" required>
@@ -378,10 +426,10 @@ function dealer_admin_page() {
             <section class="dealer-section">
                 <h2>Zoek naar dealers</h2>
                 <form method="get" action="" class="dealer-search-form">
-                    <input type="text" name="search" placeholder="Zoek op naam, postcode of stad" value="<?php echo esc_attr(stripslashes($search_term)); ?>" class="input-field">
+                    <input type="text" name="search" placeholder="Zoek op naam, postcode, stad of ccdeb" value="<?php echo esc_attr(stripslashes($search_term)); ?>" class="input-field">
                     <button type="submit" class="button-primary">Zoeken</button>
                     <?php if (!empty($search_term)) : ?>
-                        <a href="?page=dealer_admin" class="button-secondary dealer-reset-btn">Terug naar admin pagina</a>
+                        <a href="?page=dealer_admin" class="button-secondary dealer-reset-btn">Reset</a>
                     <?php endif; ?>
                 </form>
                 <h2>Upload CSV-bestand</h2>
@@ -399,6 +447,7 @@ function dealer_admin_page() {
                 <table class="dealer-admin-table">
                     <thead>
                         <tr>
+                            <th>ccdeb</th>
                             <th>Naam</th>
                             <th>Adres</th>
                             <th>Postcode</th>
@@ -410,6 +459,7 @@ function dealer_admin_page() {
                     <tbody>
                         <?php foreach ($dealers as $dealer): ?>
                             <tr>
+                                <td><?php echo esc_html($dealer->ccdeb); ?></td>
                                 <td><?php echo esc_html(stripslashes($dealer->naamorg)); ?></td>
                                 <td><?php echo esc_html($dealer->adres . ' ' . $dealer->huisnummer); ?></td>
                                 <td><?php echo esc_html($dealer->postcode); ?></td>
@@ -443,6 +493,7 @@ add_shortcode('dealer_admin', 'dealer_admin_page');
 
 // Geocode functie: haalt lat/lon op via Nominatim (OpenStreetMap)
 function dealer_admin_geocode($adres, $postcode, $stad) {
+    // Bouw query voor Nominatim search
     $query = urlencode(trim($adres . ' ' . $postcode . ' ' . $stad . ' Nederland'));
     $url = "https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=1";
     $response = wp_remote_get($url, array(
@@ -459,7 +510,7 @@ function dealer_admin_geocode($adres, $postcode, $stad) {
     return array('lat' => '', 'lon' => '');
 }
 
-// AJAX: check of dealer bestaat
+// AJAX: check of dealer bestaat (voor validatie)
 function check_dealer_exists() {
     global $wpdb;
     $table_name = 'wp_dealers';
@@ -493,6 +544,7 @@ function add_single_dealer() {
     $dealer_url = sanitize_text_field($_POST['dealer_url']);
     $dealer_huisnummer = sanitize_text_field($_POST['dealer_huisnummer']);
 
+    // Controle op dubbele dealer
     $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table_name WHERE naamorg = %s AND postcode = %s", $dealer_name, $dealer_postcode));
     if ($exists > 0) {
         echo 'duplicate';
